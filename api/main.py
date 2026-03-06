@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from api.database.database import SessionLocal, engine
 from api.models.webhook import Webhook, Base
+from api.models.delivery import Delivery
 
 app = FastAPI()
 
@@ -12,7 +13,7 @@ app = FastAPI()
 Base.metadata.create_all(bind=engine)
 
 
-# Dependency to get DB session
+# Dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -22,7 +23,7 @@ def get_db():
 
 
 # ----------------------------
-# Request Schemas
+# Schemas
 # ----------------------------
 
 class WebhookCreate(BaseModel):
@@ -36,8 +37,14 @@ class WebhookUpdate(BaseModel):
     event_types: Optional[List[str]] = None
 
 
+class EventCreate(BaseModel):
+    user_id: str
+    event_type: str
+    payload: dict
+
+
 # ----------------------------
-# CREATE WEBHOOK
+# Webhook CRUD
 # ----------------------------
 
 @app.post("/webhooks")
@@ -57,25 +64,13 @@ def register_webhook(webhook: WebhookCreate, db: Session = Depends(get_db)):
     return new_webhook
 
 
-# ----------------------------
-# GET ALL WEBHOOKS
-# ----------------------------
-
 @app.get("/webhooks")
 def list_webhooks(db: Session = Depends(get_db)):
     return db.query(Webhook).all()
 
 
-# ----------------------------
-# UPDATE WEBHOOK
-# ----------------------------
-
 @app.put("/webhooks/{webhook_id}")
-def update_webhook(
-    webhook_id: int,
-    update_data: WebhookUpdate,
-    db: Session = Depends(get_db)
-):
+def update_webhook(webhook_id: int, update_data: WebhookUpdate, db: Session = Depends(get_db)):
 
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
 
@@ -94,10 +89,6 @@ def update_webhook(
     return webhook
 
 
-# ----------------------------
-# DELETE WEBHOOK
-# ----------------------------
-
 @app.delete("/webhooks/{webhook_id}")
 def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
 
@@ -111,10 +102,6 @@ def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
 
     return {"message": "Webhook deleted"}
 
-
-# ----------------------------
-# DISABLE WEBHOOK
-# ----------------------------
 
 @app.patch("/webhooks/{webhook_id}/disable")
 def disable_webhook(webhook_id: int, db: Session = Depends(get_db)):
@@ -130,10 +117,6 @@ def disable_webhook(webhook_id: int, db: Session = Depends(get_db)):
     return {"message": "Webhook disabled"}
 
 
-# ----------------------------
-# ENABLE WEBHOOK
-# ----------------------------
-
 @app.patch("/webhooks/{webhook_id}/enable")
 def enable_webhook(webhook_id: int, db: Session = Depends(get_db)):
 
@@ -146,3 +129,38 @@ def enable_webhook(webhook_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Webhook enabled"}
+
+
+# ----------------------------
+# Event Ingestion
+# ----------------------------
+
+@app.post("/events")
+def publish_event(event: EventCreate, db: Session = Depends(get_db)):
+
+    webhooks = db.query(Webhook).filter(
+        Webhook.user_id == event.user_id,
+        Webhook.active == True
+    ).all()
+
+    deliveries_created = 0
+
+    for webhook in webhooks:
+        if event.event_type in webhook.event_types:
+
+            delivery = Delivery(
+                webhook_id=webhook.id,
+                event_type=event.event_type,
+                payload=str(event.payload),
+                status="pending"
+            )
+
+            db.add(delivery)
+            deliveries_created += 1
+
+    db.commit()
+
+    return {
+        "message": "Event accepted",
+        "deliveries_created": deliveries_created
+    }

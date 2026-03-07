@@ -1,9 +1,11 @@
 FROM python:3.11
 
-WORKDIR /app
+WORKDIR /api
+
+COPY requirements.txt .
+
+RUN pip install -r requirements.txt
 
 COPY . .
 
-RUN pip install fastapi uvicorn sqlalchemy psycopg2-binary
-
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENV PYTHONPATH=/api

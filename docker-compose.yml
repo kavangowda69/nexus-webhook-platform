@@ -10,16 +10,33 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U webhook_user"]
+      test: ["CMD-SHELL", "pg_isready -U webhook_user -d webhook_db"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+  webhook_redis:
+    image: redis:7
+    container_name: webhook_redis
+    ports:
+      - "6379:6379"
+
   webhook_api:
     build: .
     container_name: webhook_api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     depends_on:
       webhook_postgres:
         condition: service_healthy
+      webhook_redis:
+        condition: service_started
+
+  webhook_worker:
+    build: .
+    container_name: webhook_worker
+    command: python api/worker/worker.py
+    depends_on:
+      - webhook_postgres
+      - webhook_redis

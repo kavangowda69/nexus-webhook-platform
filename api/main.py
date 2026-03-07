@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 
+import redis
+import json
+
 from api.database.database import SessionLocal, engine
 from api.models.webhook import Webhook, Base
 from api.models.delivery import Delivery
@@ -11,6 +14,9 @@ app = FastAPI()
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+# Redis connection
+redis_client = redis.Redis(host="webhook_redis", port=6379, decode_responses=True)
 
 
 # Dependency
@@ -146,6 +152,7 @@ def publish_event(event: EventCreate, db: Session = Depends(get_db)):
     deliveries_created = 0
 
     for webhook in webhooks:
+
         if event.event_type in webhook.event_types:
 
             delivery = Delivery(
@@ -156,6 +163,16 @@ def publish_event(event: EventCreate, db: Session = Depends(get_db)):
             )
 
             db.add(delivery)
+
+            # Get delivery ID before commit
+            db.flush()
+
+            # Push job to Redis queue
+            redis_client.lpush(
+                "webhook_queue",
+                json.dumps({"delivery_id": delivery.id})
+            )
+
             deliveries_created += 1
 
     db.commit()

@@ -5,6 +5,9 @@ app = FastAPI()
 @app.post("/test")
 async def receive_webhook(request: Request):
     payload = await request.json()
-    print("Webhook received:")
-    print(payload)
+
+    print(
+        f"Webhook received | user={payload.get('user_id')} | payload={payload.get('payload')}"
+    )
+
     return {"status": "ok"}

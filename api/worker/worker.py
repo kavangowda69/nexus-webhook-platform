@@ -8,15 +8,7 @@ from api.database.database import SessionLocal
 from api.models.delivery import Delivery
 from api.models.webhook import Webhook
 
-
-redis_client = redis.Redis(host="webhook_redis", port=6379, db=0)
-
-# Global rate limit (deliveries per second)
-RATE_LIMIT = 2
-
-# Track delivery count per second
-current_second = int(time.time())
-deliveries_this_second = 0
+redis_client = redis.Redis(host="webhook_redis", port=6379, db=0, decode_responses=True)
 
 
 def process_job(job_data):
@@ -24,6 +16,7 @@ def process_job(job_data):
     db: Session = SessionLocal()
 
     try:
+
         job = json.loads(job_data)
 
         delivery_id = job["delivery_id"]
@@ -45,6 +38,7 @@ def process_job(job_data):
             response = requests.post(
                 webhook.url,
                 json={
+                    "user_id": webhook.user_id,
                     "event_type": delivery.event_type,
                     "payload": delivery.payload
                 },
@@ -68,40 +62,44 @@ def process_job(job_data):
 
 def start_worker():
 
-    global current_second
-    global deliveries_this_second
+    print("Worker started")
 
-    print("Redis Worker started...")
+    last_second = int(time.time())
+    processed_this_second = 0
+
+    queue_index = 0   # round robin pointer
 
     while True:
 
-        # Pull job from queue
-        job = redis_client.brpop("webhook_queue")
+        rate_limit = redis_client.get("global_rate_limit")
+        RATE_LIMIT = int(rate_limit) if rate_limit else 10
+
+        now = int(time.time())
+
+        if now != last_second:
+            last_second = now
+            processed_this_second = 0
+
+        if processed_this_second >= RATE_LIMIT:
+            time.sleep(0.05)
+            continue
+
+        queues = redis_client.keys("webhook_queue_*")
+
+        if not queues:
+            time.sleep(0.1)
+            continue
+
+        # round robin queue selection
+        queue = queues[queue_index % len(queues)]
+        queue_index += 1
+
+        job = redis_client.rpop(queue)
 
         if job:
 
-            now = int(time.time())
-
-            # Reset counter if new second
-            if now != current_second:
-                current_second = now
-                deliveries_this_second = 0
-
-            # If rate limit reached, wait until next second
-            if deliveries_this_second >= RATE_LIMIT:
-                print("Rate limit reached — sleeping")
-                time.sleep(1)
-                current_second = int(time.time())
-                deliveries_this_second = 0
-
-                current_second = int(time.time())
-                deliveries_this_second = 0
-
-            _, job_data = job
-
-            process_job(job_data)
-
-            deliveries_this_second += 1
+            process_job(job)
+            processed_this_second += 1
 
 
 if __name__ == "__main__":

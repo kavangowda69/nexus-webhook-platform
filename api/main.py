@@ -12,14 +12,11 @@ from api.models.delivery import Delivery
 
 app = FastAPI()
 
-# Create tables
 Base.metadata.create_all(bind=engine)
 
-# Redis connection
 redis_client = redis.Redis(host="webhook_redis", port=6379, decode_responses=True)
 
 
-# Dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -47,6 +44,33 @@ class EventCreate(BaseModel):
     user_id: str
     event_type: str
     payload: dict
+
+
+class RateLimitUpdate(BaseModel):
+    rate_limit: int
+
+
+# ----------------------------
+# Rate Limit API (Part B)
+# ----------------------------
+
+@app.get("/internal/rate-limit")
+def get_rate_limit():
+
+    rate = redis_client.get("global_rate_limit")
+
+    if rate is None:
+        return {"rate_limit": 10}
+
+    return {"rate_limit": int(rate)}
+
+
+@app.put("/internal/rate-limit")
+def update_rate_limit(data: RateLimitUpdate):
+
+    redis_client.set("global_rate_limit", data.rate_limit)
+
+    return {"rate_limit": data.rate_limit}
 
 
 # ----------------------------
@@ -163,13 +187,12 @@ def publish_event(event: EventCreate, db: Session = Depends(get_db)):
             )
 
             db.add(delivery)
-
-            # Get delivery ID before commit
             db.flush()
 
-            # Push job to Redis queue
+            queue_name = f"webhook_queue_{event.user_id}"
+
             redis_client.lpush(
-                "webhook_queue",
+                queue_name,
                 json.dumps({"delivery_id": delivery.id})
             )
 

@@ -320,19 +320,6 @@ This launches:
 
 ---
 
-# Health Check
-
-```
-curl localhost:8000/health
-```
-
-Expected response:
-
-```
-{"status":"ok"}
-```
-
----
 
 # Register a Webhook
 
@@ -340,6 +327,7 @@ Expected response:
 curl -X POST http://localhost:8000/webhooks \
 -H "Content-Type: application/json" \
 -d '{
+"user_id": "123",
 "url": "http://host.docker.internal:9000/webhook",
 "event_types": ["request.created"]
 }'
@@ -365,17 +353,11 @@ curl -X POST http://localhost:8000/events \
 
 # Observe Webhook Delivery
 
-Receiver logs:
+To observe webhook deliveries locally, you can run a simple receiver:
 
-```
-Webhook received:
-{
-  "event_type": "request.created",
-  "payload": {
-    "request_id": 42
-  }
-}
-```
+uvicorn receiver:app --port 9000
+
+This prints received webhook payloads for testing purposes.
 
 ---
 
@@ -412,3 +394,4 @@ Multi-user fairness scheduling
 
 ### Phase 10
 Docker Compose orchestration
+

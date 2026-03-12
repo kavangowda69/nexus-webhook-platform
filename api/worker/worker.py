@@ -10,7 +10,7 @@ from api.models.delivery import Delivery
 from api.models.webhook import Webhook
 from api.logger import get_logger
 from api.metrics import DELIVERIES_SUCCESS, DELIVERIES_FAILED, DELIVERY_LATENCY
-from prometheus_client import start_http_server
+
 
 logger = get_logger("worker")
 
@@ -59,7 +59,11 @@ def process_job(job_data):
             if 200 <= response.status_code < 300:
                 delivery.status = "success"
                 DELIVERIES_SUCCESS.labels(webhook_id=str(webhook.id)).inc()
-                logger.info(f"delivery.success delivery_id={delivery_id} webhook_id={webhook.id} status_code={response.status_code} latency={latency:.3f}s")
+                logger.info(
+                    f"delivery.success delivery_id={delivery_id} "
+                    f"webhook_id={webhook.id} status_code={response.status_code} "
+                    f"latency={latency:.3f}s"
+                )
             else:
                 delivery.status = "failed"
                 DELIVERIES_FAILED.labels(webhook_id=str(webhook.id)).inc()
@@ -79,8 +83,7 @@ def process_job(job_data):
 
 
 def start_worker():
-    start_http_server(9090)  # worker metrics on port 9090
-    logger.info("worker.started metrics_port=9090")
+    logger.info("worker.started")
 
     last_second = int(time.time())
     processed_this_second = 0

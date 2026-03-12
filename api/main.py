@@ -10,6 +10,7 @@ from typing import List, Optional
 from prometheus_client import generate_latest, REGISTRY, CONTENT_TYPE_LATEST
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from api.tracing import setup_tracing
+from api.sanitizer import sanitize_payload
 
 from api.database.database import SessionLocal, engine
 from api.models.webhook import Webhook, Base
@@ -194,10 +195,13 @@ def publish_event(event: EventCreate, db: Session = Depends(get_db)):
 
     for webhook in webhooks:
         if event.event_type in webhook.event_types:
+            clean_payload = sanitize_payload(event.payload)
+            logger.info(f"payload.sanitized user_id={event.user_id}")
+
             delivery = Delivery(
                 webhook_id=webhook.id,
                 event_type=event.event_type,
-                payload=str(event.payload),
+                payload=str(clean_payload),
                 status="pending"
             )
             db.add(delivery)

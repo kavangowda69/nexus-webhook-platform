@@ -1,23 +1,25 @@
+import os
+import redis
+import json
+
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
-
-import redis
-import json
 
 from api.database.database import SessionLocal, engine
 from api.models.webhook import Webhook, Base
 from api.models.delivery import Delivery
 
 app = FastAPI()
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 
 Base.metadata.create_all(bind=engine)
 
-redis_client = redis.Redis(host="webhook_redis", port=6379, decode_responses=True)
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "webhook_redis"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    decode_responses=True
+)
 
 
 def get_db():
@@ -54,25 +56,29 @@ class RateLimitUpdate(BaseModel):
 
 
 # ----------------------------
-# Rate Limit API (Part B)
+# Health
+# ----------------------------
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+# ----------------------------
+# Rate Limit API
 # ----------------------------
 
 @app.get("/internal/rate-limit")
 def get_rate_limit():
-
     rate = redis_client.get("global_rate_limit")
-
     if rate is None:
         return {"rate_limit": 10}
-
     return {"rate_limit": int(rate)}
 
 
 @app.put("/internal/rate-limit")
 def update_rate_limit(data: RateLimitUpdate):
-
     redis_client.set("global_rate_limit", data.rate_limit)
-
     return {"rate_limit": data.rate_limit}
 
 
@@ -82,18 +88,15 @@ def update_rate_limit(data: RateLimitUpdate):
 
 @app.post("/webhooks")
 def register_webhook(webhook: WebhookCreate, db: Session = Depends(get_db)):
-
     new_webhook = Webhook(
         user_id=webhook.user_id,
         url=webhook.url,
         event_types=webhook.event_types,
         active=True
     )
-
     db.add(new_webhook)
     db.commit()
     db.refresh(new_webhook)
-
     return new_webhook
 
 
@@ -104,63 +107,45 @@ def list_webhooks(db: Session = Depends(get_db)):
 
 @app.put("/webhooks/{webhook_id}")
 def update_webhook(webhook_id: int, update_data: WebhookUpdate, db: Session = Depends(get_db)):
-
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
-
     if update_data.url is not None:
         webhook.url = update_data.url
-
     if update_data.event_types is not None:
         webhook.event_types = update_data.event_types
-
     db.commit()
     db.refresh(webhook)
-
     return webhook
 
 
 @app.delete("/webhooks/{webhook_id}")
 def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
-
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
-
     db.delete(webhook)
     db.commit()
-
     return {"message": "Webhook deleted"}
 
 
 @app.patch("/webhooks/{webhook_id}/disable")
 def disable_webhook(webhook_id: int, db: Session = Depends(get_db)):
-
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
-
     webhook.active = False
     db.commit()
-
     return {"message": "Webhook disabled"}
 
 
 @app.patch("/webhooks/{webhook_id}/enable")
 def enable_webhook(webhook_id: int, db: Session = Depends(get_db)):
-
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
-
     webhook.active = True
     db.commit()
-
     return {"message": "Webhook enabled"}
 
 
@@ -170,7 +155,6 @@ def enable_webhook(webhook_id: int, db: Session = Depends(get_db)):
 
 @app.post("/events")
 def publish_event(event: EventCreate, db: Session = Depends(get_db)):
-
     webhooks = db.query(Webhook).filter(
         Webhook.user_id == event.user_id,
         Webhook.active == True
@@ -179,30 +163,24 @@ def publish_event(event: EventCreate, db: Session = Depends(get_db)):
     deliveries_created = 0
 
     for webhook in webhooks:
-
         if event.event_type in webhook.event_types:
-
             delivery = Delivery(
                 webhook_id=webhook.id,
                 event_type=event.event_type,
                 payload=str(event.payload),
                 status="pending"
             )
-
             db.add(delivery)
             db.flush()
 
             queue_name = f"webhook_queue_{event.user_id}"
-
             redis_client.lpush(
                 queue_name,
                 json.dumps({"delivery_id": delivery.id})
             )
-
             deliveries_created += 1
 
     db.commit()
-
     return {
         "message": "Event accepted",
         "deliveries_created": deliveries_created

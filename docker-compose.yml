@@ -32,6 +32,7 @@ services:
       dockerfile: dockerfile
     container_name: webhook_api
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
     ports:
       - "8000:8000"
     depends_on:
@@ -51,7 +52,8 @@ services:
       context: .
       dockerfile: dockerfile
     container_name: webhook_worker
-    command: python api/worker/worker.py
+    command: python -m api.worker.worker
+    env_file: .env
     depends_on:
       webhook_postgres:
         condition: service_healthy

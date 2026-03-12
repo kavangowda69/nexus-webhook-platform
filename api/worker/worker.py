@@ -9,6 +9,8 @@ from api.database.database import SessionLocal
 from api.models.delivery import Delivery
 from api.models.webhook import Webhook
 from api.logger import get_logger
+from api.metrics import DELIVERIES_SUCCESS, DELIVERIES_FAILED, DELIVERY_LATENCY
+from prometheus_client import start_http_server
 
 logger = get_logger("worker")
 
@@ -39,6 +41,8 @@ def process_job(job_data):
             return
 
         try:
+            start_time = time.time()
+
             response = requests.post(
                 webhook.url,
                 json={
@@ -48,14 +52,23 @@ def process_job(job_data):
                 },
                 timeout=5
             )
+
+            latency = time.time() - start_time
+            DELIVERY_LATENCY.observe(latency)
+
             if 200 <= response.status_code < 300:
                 delivery.status = "success"
-                logger.info(f"delivery.success delivery_id={delivery_id} webhook_id={webhook.id} status_code={response.status_code}")
+                DELIVERIES_SUCCESS.labels(webhook_id=str(webhook.id)).inc()
+                logger.info(f"delivery.success delivery_id={delivery_id} webhook_id={webhook.id} status_code={response.status_code} latency={latency:.3f}s")
             else:
                 delivery.status = "failed"
+                DELIVERIES_FAILED.labels(webhook_id=str(webhook.id)).inc()
                 logger.warning(f"delivery.failed delivery_id={delivery_id} status_code={response.status_code}")
 
         except Exception as e:
+            latency = time.time() - start_time
+            DELIVERY_LATENCY.observe(latency)
+            DELIVERIES_FAILED.labels(webhook_id=str(webhook.id)).inc()
             logger.error(f"delivery.error delivery_id={delivery_id} error={str(e)}")
             delivery.status = "failed"
 
@@ -66,7 +79,8 @@ def process_job(job_data):
 
 
 def start_worker():
-    logger.info("worker.started")
+    start_http_server(9090)  # worker metrics on port 9090
+    logger.info("worker.started metrics_port=9090")
 
     last_second = int(time.time())
     processed_this_second = 0

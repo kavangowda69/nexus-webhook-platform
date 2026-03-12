@@ -10,6 +10,9 @@ from typing import List, Optional
 from api.database.database import SessionLocal, engine
 from api.models.webhook import Webhook, Base
 from api.models.delivery import Delivery
+from api.logger import get_logger
+
+logger = get_logger("api")
 
 app = FastAPI()
 
@@ -79,6 +82,7 @@ def get_rate_limit():
 @app.put("/internal/rate-limit")
 def update_rate_limit(data: RateLimitUpdate):
     redis_client.set("global_rate_limit", data.rate_limit)
+    logger.info(f"rate_limit.updated limit={data.rate_limit}")
     return {"rate_limit": data.rate_limit}
 
 
@@ -97,6 +101,7 @@ def register_webhook(webhook: WebhookCreate, db: Session = Depends(get_db)):
     db.add(new_webhook)
     db.commit()
     db.refresh(new_webhook)
+    logger.info(f"webhook.registered webhook_id={new_webhook.id} user_id={webhook.user_id}")
     return new_webhook
 
 
@@ -116,6 +121,7 @@ def update_webhook(webhook_id: int, update_data: WebhookUpdate, db: Session = De
         webhook.event_types = update_data.event_types
     db.commit()
     db.refresh(webhook)
+    logger.info(f"webhook.updated webhook_id={webhook_id}")
     return webhook
 
 
@@ -126,6 +132,7 @@ def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Webhook not found")
     db.delete(webhook)
     db.commit()
+    logger.info(f"webhook.deleted webhook_id={webhook_id}")
     return {"message": "Webhook deleted"}
 
 
@@ -136,6 +143,7 @@ def disable_webhook(webhook_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Webhook not found")
     webhook.active = False
     db.commit()
+    logger.info(f"webhook.disabled webhook_id={webhook_id}")
     return {"message": "Webhook disabled"}
 
 
@@ -146,6 +154,7 @@ def enable_webhook(webhook_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Webhook not found")
     webhook.active = True
     db.commit()
+    logger.info(f"webhook.enabled webhook_id={webhook_id}")
     return {"message": "Webhook enabled"}
 
 
@@ -155,6 +164,8 @@ def enable_webhook(webhook_id: int, db: Session = Depends(get_db)):
 
 @app.post("/events")
 def publish_event(event: EventCreate, db: Session = Depends(get_db)):
+    logger.info(f"event.received user_id={event.user_id} event_type={event.event_type}")
+
     webhooks = db.query(Webhook).filter(
         Webhook.user_id == event.user_id,
         Webhook.active == True
@@ -181,6 +192,7 @@ def publish_event(event: EventCreate, db: Session = Depends(get_db)):
             deliveries_created += 1
 
     db.commit()
+    logger.info(f"event.queued user_id={event.user_id} deliveries_created={deliveries_created}")
     return {
         "message": "Event accepted",
         "deliveries_created": deliveries_created

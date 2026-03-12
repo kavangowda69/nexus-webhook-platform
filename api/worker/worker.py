@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 from api.database.database import SessionLocal
 from api.models.delivery import Delivery
 from api.models.webhook import Webhook
+from api.logger import get_logger
+
+logger = get_logger("worker")
 
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "webhook_redis"),
@@ -25,10 +28,12 @@ def process_job(job_data):
 
         delivery = db.query(Delivery).filter(Delivery.id == delivery_id).first()
         if not delivery:
+            logger.warning(f"delivery.not_found delivery_id={delivery_id}")
             return
 
         webhook = db.query(Webhook).filter(Webhook.id == delivery.webhook_id).first()
         if not webhook:
+            logger.warning(f"webhook.not_found webhook_id={delivery.webhook_id}")
             delivery.status = "failed"
             db.commit()
             return
@@ -45,11 +50,13 @@ def process_job(job_data):
             )
             if 200 <= response.status_code < 300:
                 delivery.status = "success"
+                logger.info(f"delivery.success delivery_id={delivery_id} webhook_id={webhook.id} status_code={response.status_code}")
             else:
                 delivery.status = "failed"
+                logger.warning(f"delivery.failed delivery_id={delivery_id} status_code={response.status_code}")
 
         except Exception as e:
-            print("Delivery error:", e)
+            logger.error(f"delivery.error delivery_id={delivery_id} error={str(e)}")
             delivery.status = "failed"
 
         db.commit()
@@ -59,7 +66,7 @@ def process_job(job_data):
 
 
 def start_worker():
-    print("Worker started")
+    logger.info("worker.started")
 
     last_second = int(time.time())
     processed_this_second = 0

@@ -12,6 +12,11 @@ from api.models.webhook import Webhook, Base
 from api.models.delivery import Delivery
 from api.logger import get_logger
 
+from prometheus_client import make_wsgi_app, REGISTRY
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
+from api.metrics import EVENTS_RECEIVED, QUEUE_DEPTH
+
 logger = get_logger("api")
 
 app = FastAPI()
@@ -65,6 +70,13 @@ class RateLimitUpdate(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/metrics")
+def metrics():
+    return Response(
+        content=generate_latest(REGISTRY),
+        media_type=CONTENT_TYPE_LATEST
+    )
 
 
 # ----------------------------
@@ -192,6 +204,20 @@ def publish_event(event: EventCreate, db: Session = Depends(get_db)):
             deliveries_created += 1
 
     db.commit()
+
+    
+    EVENTS_RECEIVED.labels(
+        user_id=event.user_id,
+        event_type=event.event_type
+    ).inc(deliveries_created)
+
+    # update queue depth gauge
+    total_depth = sum(
+        redis_client.llen(f"webhook_queue_{event.user_id}")
+        for _ in [1]
+    )
+    QUEUE_DEPTH.set(total_depth)
+
     logger.info(f"event.queued user_id={event.user_id} deliveries_created={deliveries_created}")
     return {
         "message": "Event accepted",

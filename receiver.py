@@ -2,6 +2,10 @@ from fastapi import FastAPI, Request
 
 app = FastAPI()
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 @app.post("/test")
 async def receive_webhook(request: Request):
     payload = await request.json()

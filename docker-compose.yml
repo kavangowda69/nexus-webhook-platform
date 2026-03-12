@@ -20,9 +20,16 @@ services:
     container_name: webhook_redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   webhook_api:
-    build: .
+    build:
+      context: .
+      dockerfile: dockerfile
     container_name: webhook_api
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     ports:
@@ -31,12 +38,41 @@ services:
       webhook_postgres:
         condition: service_healthy
       webhook_redis:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   webhook_worker:
-    build: .
+    build:
+      context: .
+      dockerfile: dockerfile
     container_name: webhook_worker
     command: python api/worker/worker.py
     depends_on:
-      - webhook_postgres
-      - webhook_redis
+      webhook_postgres:
+        condition: service_healthy
+      webhook_redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; redis.Redis(host='webhook_redis', port=6379).ping()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  webhook_receiver:
+    build:
+      context: .
+      dockerfile: Dockerfile.receiver
+    container_name: webhook_receiver
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

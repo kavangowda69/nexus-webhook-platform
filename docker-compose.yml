@@ -112,3 +112,17 @@ services:
       - "4317:4317"
     environment:
       - COLLECTOR_OTLP_ENABLED=true
+
+  inference_server:
+    build:
+      context: ./inference
+      dockerfile: Dockerfile
+    container_name: inference_server
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

@@ -35,6 +35,86 @@ RETRY_BASE_DELAY = 2
 CIRCUIT_BREAKER_THRESHOLD = 5
 CIRCUIT_BREAKER_TIMEOUT = 60
 
+# Adaptive rate limiting config
+RATE_INCREASE_STEP = 1      # increase by 1 req/s when healthy
+RATE_DECREASE_STEP = 2      # decrease by 2 req/s when unhealthy
+RATE_MIN = 1                # never go below 1 req/s
+RATE_MAX = 50               # never exceed 50 req/s
+
+
+# ----------------------------
+# Adaptive Rate Limiter
+# ----------------------------
+
+def get_endpoint_rate(webhook_url: str) -> int:
+    key = f"adaptive_rate:{webhook_url}"
+    rate = redis_client.get(key)
+    if rate is None:
+        default = int(os.getenv("RATE_LIMIT", 10))
+        redis_client.set(key, default)
+        return default
+    return int(rate)
+
+
+def increase_rate(webhook_url: str):
+    key = f"adaptive_rate:{webhook_url}"
+    current = get_endpoint_rate(webhook_url)
+    new_rate = min(current + RATE_INCREASE_STEP, RATE_MAX)
+    redis_client.set(key, new_rate)
+    if new_rate != current:
+        logger.info(
+            f"adaptive_rate.increased url={webhook_url} "
+            f"old={current} new={new_rate}"
+        )
+
+
+def decrease_rate(webhook_url: str):
+    key = f"adaptive_rate:{webhook_url}"
+    current = get_endpoint_rate(webhook_url)
+    new_rate = max(current - RATE_DECREASE_STEP, RATE_MIN)
+    redis_client.set(key, new_rate)
+    if new_rate != current:
+        logger.warning(
+            f"adaptive_rate.decreased url={webhook_url} "
+            f"old={current} new={new_rate}"
+        )
+
+
+def compute_endpoint_score(webhook_url: str) -> float:
+    success_key = f"endpoint_success:{webhook_url}"
+    total_key = f"endpoint_total:{webhook_url}"
+    latency_key = f"endpoint_latency:{webhook_url}"
+
+    success = int(redis_client.get(success_key) or 0)
+    total = int(redis_client.get(total_key) or 1)
+    avg_latency = float(redis_client.get(latency_key) or 0.5)
+
+    success_rate = success / total
+    latency_factor = max(0.1, 1.0 - (avg_latency / 5.0))
+    score = success_rate * latency_factor
+
+    logger.info(
+        f"endpoint.score url={webhook_url} score={score:.2f} "
+        f"success_rate={success_rate:.2f} latency_factor={latency_factor:.2f}"
+    )
+    return score
+
+
+def record_endpoint_result(webhook_url: str, success: bool, latency: float):
+    total_key = f"endpoint_total:{webhook_url}"
+    success_key = f"endpoint_success:{webhook_url}"
+    latency_key = f"endpoint_latency:{webhook_url}"
+
+    redis_client.incr(total_key)
+    redis_client.expire(total_key, 300)
+
+    if success:
+        redis_client.incr(success_key)
+        redis_client.expire(success_key, 300)
+
+    redis_client.set(latency_key, round(latency, 3))
+    redis_client.expire(latency_key, 300)
+
 
 # ----------------------------
 # Circuit Breaker
@@ -57,7 +137,9 @@ def record_failure(webhook_url: str):
     key = f"circuit:{webhook_url}"
     failures = redis_client.incr(key)
     redis_client.expire(key, CIRCUIT_BREAKER_TIMEOUT)
-    logger.warning(f"circuit.failure_recorded url={webhook_url} failures={failures}")
+    logger.warning(
+        f"circuit.failure_recorded url={webhook_url} failures={failures}"
+    )
 
 
 def reset_circuit(webhook_url: str):
@@ -109,15 +191,27 @@ def deliver_with_retry(webhook, delivery, delivery_id):
                 span.set_attribute("http.status_code", response.status_code)
                 span.set_attribute("latency_seconds", round(latency, 3))
 
+                record_endpoint_result(webhook.url, True, latency)
+
                 if 200 <= response.status_code < 300:
                     reset_circuit(webhook.url)
+                    increase_rate(webhook.url)
                     DELIVERIES_SUCCESS.labels(webhook_id=str(webhook.id)).inc()
                     logger.info(
                         f"delivery.success delivery_id={delivery_id} "
                         f"attempt={attempt} latency={latency:.3f}s"
                     )
                     return True
+                elif response.status_code in (429, 503):
+                    record_endpoint_result(webhook.url, False, latency)
+                    decrease_rate(webhook.url)
+                    logger.warning(
+                        f"delivery.throttled delivery_id={delivery_id} "
+                        f"status_code={response.status_code} "
+                        f"rate decreased for url={webhook.url}"
+                    )
                 else:
+                    record_endpoint_result(webhook.url, False, latency)
                     logger.warning(
                         f"delivery.attempt_failed delivery_id={delivery_id} "
                         f"attempt={attempt} status_code={response.status_code}"
@@ -126,6 +220,8 @@ def deliver_with_retry(webhook, delivery, delivery_id):
             except Exception as e:
                 latency = time.time() - start_time
                 DELIVERY_LATENCY.observe(latency)
+                record_endpoint_result(webhook.url, False, latency)
+                decrease_rate(webhook.url)
                 span.record_exception(e)
                 logger.error(
                     f"delivery.error delivery_id={delivery_id} "
@@ -177,6 +273,13 @@ def process_job(job_data):
             db.commit()
             return
 
+        # Check endpoint score and adjust rate
+        score = compute_endpoint_score(webhook.url)
+        if score < 0.5:
+            decrease_rate(webhook.url)
+        else:
+            increase_rate(webhook.url)
+
         success = deliver_with_retry(webhook, delivery, delivery_id)
 
         if success:
@@ -203,13 +306,14 @@ def start_worker():
     queue_index = 0
 
     while True:
-        rate_limit = redis_client.get("global_rate_limit")
-        RATE_LIMIT = int(rate_limit) if rate_limit else int(os.getenv("RATE_LIMIT", 10))
-
         now = int(time.time())
         if now != last_second:
             last_second = now
             processed_this_second = 0
+
+        # Use global rate limit as ceiling
+        global_limit = redis_client.get("global_rate_limit")
+        RATE_LIMIT = int(global_limit) if global_limit else int(os.getenv("RATE_LIMIT", 10))
 
         if processed_this_second >= RATE_LIMIT:
             time.sleep(0.05)

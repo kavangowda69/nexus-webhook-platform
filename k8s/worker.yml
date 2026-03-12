@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webhook-worker
+  template:
+    metadata:
+      labels:
+        app: webhook-worker
+    spec:
+      containers:
+        - name: webhook-worker
+          image: nexus-webhook-worker:latest
+          imagePullPolicy: Never
+          command: ["python", "-m", "api.worker.worker"]
+          envFrom:
+            - configMapRef:
+                name: nexus-config
+            - secretRef:
+                name: nexus-secret
+          ports:
+            - containerPort: 9090

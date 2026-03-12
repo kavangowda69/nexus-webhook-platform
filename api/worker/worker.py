@@ -1,3 +1,4 @@
+import ast
 import os
 import json
 import time
@@ -27,6 +28,8 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
+INFERENCE_SERVER_URL = os.getenv("INFERENCE_SERVER_URL", "http://inference_server:3001")
+
 # ----------------------------
 # Config
 # ----------------------------
@@ -36,10 +39,10 @@ CIRCUIT_BREAKER_THRESHOLD = 5
 CIRCUIT_BREAKER_TIMEOUT = 60
 
 # Adaptive rate limiting config
-RATE_INCREASE_STEP = 1      # increase by 1 req/s when healthy
-RATE_DECREASE_STEP = 2      # decrease by 2 req/s when unhealthy
-RATE_MIN = 1                # never go below 1 req/s
-RATE_MAX = 50               # never exceed 50 req/s
+RATE_INCREASE_STEP = 1
+RATE_DECREASE_STEP = 2
+RATE_MIN = 1
+RATE_MAX = 50
 
 
 # ----------------------------
@@ -160,6 +163,64 @@ def send_to_dlq(job: dict, reason: str):
 
 
 # ----------------------------
+# Inference Routing
+# ----------------------------
+
+def route_to_inference(delivery, webhook, delivery_id):
+    tracer = trace.get_tracer("webhook-worker")
+
+    with tracer.start_as_current_span("inference.request") as span:
+        span.set_attribute("delivery_id", delivery_id)
+        span.set_attribute("webhook_id", webhook.id)
+
+        try:
+            payload = ast.literal_eval(delivery.payload)
+        except Exception:
+            payload = {"input": delivery.payload}
+
+        try:
+            response = requests.post(
+                f"{INFERENCE_SERVER_URL}/predict",
+                json={
+                    "request": {
+                        "input": payload,
+                        "model": payload.get("model", "echo")
+                    }
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                prediction = response.json()
+                logger.info(
+                    f"inference.success delivery_id={delivery_id} "
+                    f"model={payload.get('model', 'echo')}"
+                )
+
+                requests.post(
+                    webhook.url,
+                    json={
+                        "user_id": webhook.user_id,
+                        "event_type": "inference.completed",
+                        "prediction": prediction
+                    },
+                    timeout=5
+                )
+                return True
+            else:
+                logger.warning(
+                    f"inference.failed delivery_id={delivery_id} "
+                    f"status={response.status_code}"
+                )
+                return False
+
+        except Exception as e:
+            span.record_exception(e)
+            logger.error(f"inference.error delivery_id={delivery_id} error={str(e)}")
+            return False
+
+
+# ----------------------------
 # Delivery with Retry
 # ----------------------------
 
@@ -263,6 +324,14 @@ def process_job(job_data):
             db.commit()
             return
 
+        # Route inference events to model server
+        if delivery.event_type == "inference.requested":
+            logger.info(f"inference.routing delivery_id={delivery_id}")
+            success = route_to_inference(delivery, webhook, delivery_id)
+            delivery.status = "success" if success else "failed"
+            db.commit()
+            return
+
         if is_circuit_open(webhook.url):
             logger.warning(
                 f"delivery.circuit_open delivery_id={delivery_id} "
@@ -273,7 +342,6 @@ def process_job(job_data):
             db.commit()
             return
 
-        # Check endpoint score and adjust rate
         score = compute_endpoint_score(webhook.url)
         if score < 0.5:
             decrease_rate(webhook.url)
@@ -311,7 +379,6 @@ def start_worker():
             last_second = now
             processed_this_second = 0
 
-        # Use global rate limit as ceiling
         global_limit = redis_client.get("global_rate_limit")
         RATE_LIMIT = int(global_limit) if global_limit else int(os.getenv("RATE_LIMIT", 10))
 

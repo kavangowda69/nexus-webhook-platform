@@ -20,12 +20,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install flake8
+        run: pip install flake8
 
       - name: Run flake8
-        run: |
-          flake8 api/ --max-line-length=120 --exclude=__pycache__
+        run: flake8 api/ --max-line-length=120 --exclude=__pycache__
 
 
   test:
@@ -74,14 +72,45 @@ jobs:
           DATABASE_URL: postgresql://webhook_user:webhook_pass@localhost:5432/webhook_db
           REDIS_HOST: localhost
           REDIS_PORT: 6379
-        run: |
-          pytest tests/ -v
+        run: pytest tests/ -v
+
+
+  security-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image for scanning
+        run: docker build -f dockerfile -t nexus-webhook-api:scan .
+
+      - name: Run Trivy on API image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: nexus-webhook-api:scan
+          format: table
+          exit-code: 1
+          severity: CRITICAL
+          ignore-unfixed: true
+
+      - name: Build Receiver image for scanning
+        run: docker build -f Dockerfile.receiver -t nexus-webhook-receiver:scan .
+
+      - name: Run Trivy on Receiver image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: nexus-webhook-receiver:scan
+          format: table
+          exit-code: 1
+          severity: CRITICAL
+          ignore-unfixed: true
 
 
   build:
     name: Build Docker Images
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [security-scan]
     steps:
       - uses: actions/checkout@v4
 

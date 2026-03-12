@@ -9,3 +9,5 @@ python-dotenv
 structlog
 prometheus-client
 requests
+pytest
+httpx

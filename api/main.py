@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 from prometheus_client import generate_latest, REGISTRY, CONTENT_TYPE_LATEST
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from api.tracing import setup_tracing
 
 from api.database.database import SessionLocal, engine
 from api.models.webhook import Webhook, Base
@@ -18,6 +20,8 @@ from api.metrics import EVENTS_RECEIVED, QUEUE_DEPTH
 logger = get_logger("api")
 
 app = FastAPI()
+setup_tracing("webhook-api")
+FastAPIInstrumentor.instrument_app(app)
 
 Base.metadata.create_all(bind=engine)
 

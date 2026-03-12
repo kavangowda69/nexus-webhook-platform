@@ -100,6 +100,7 @@ def process_job(job_data):
     finally:
         db.close()
 
+
 def start_worker():
     logger.info("worker.started")
 

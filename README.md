@@ -1,14 +1,14 @@
 # Nexus — Webhook Delivery Platform
 
-A production-grade distributed webhook delivery system built phase by phase — from a basic FastAPI app to a full platform with Kubernetes, observability, security scanning, adaptive rate limiting, and async AI inference routing.
+A production-grade distributed webhook delivery system built phase by phase — from a basic FastAPI app to a full platform with Kubernetes, observability, security scanning, adaptive rate limiting, async AI inference routing, alerting, centralized logging, and Helm packaging.
 
-This isn't a project. It's a working system that handles real load (23k requests, 0% failure rate under test) with every layer you'd expect in a real engineering team's infrastructure.
+This isn't a tutorial project. It's a working system that handles real load (23k requests, 0% failure rate under test) with every layer you'd expect in a real engineering team's infrastructure.
 
 ---
 
 ## What it does
 
-Clients register webhooks and publish events. Nexus queues the deliveries, routes them to the right endpoints, retries on failure, backs off when endpoints go down, and adapts its delivery rate based on endpoint health. Every request is traced end to end. Every failure is logged in structured JSON. The whole thing runs on Kubernetes with autoscaling — and if a pod crashes, an AI diagnostics service tells you why.
+Clients register webhooks and publish events. Nexus queues the deliveries, routes them to the right endpoints, retries on failure, backs off when endpoints go down, and adapts its delivery rate based on endpoint health. Every request is traced end to end. Every failure is logged in structured JSON and searchable in Kibana. Alerts fire to Slack when things go wrong. The whole thing runs on Kubernetes with autoscaling — and if a pod crashes, an AI diagnostics service tells you why.
 ```
 Client → POST /events
            │
@@ -33,8 +33,10 @@ Client → POST /events
 | API | FastAPI, SQLAlchemy, Postgres |
 | Queue | Redis |
 | Containers | Docker (multi-stage, 341MB images) |
-| Orchestration | Kubernetes, HPA |
+| Orchestration | Kubernetes, Helm, HPA |
 | Observability | Prometheus, Grafana, Jaeger (OpenTelemetry) |
+| Log Aggregation | Elasticsearch, Logstash, Kibana (ELK) |
+| Alerting | AlertManager, Slack |
 | CI/CD | GitHub Actions, GitHub Container Registry |
 | Security | Trivy container scanning, payload sanitization |
 | AIOps | Ollama, Llama 3 |
@@ -60,11 +62,16 @@ Client → POST /events
                         │                                      │
                         └──────────────────────────────────────┘
                                        │
-                       ┌───────────────┼───────────────┐
-                       │               │               │
-                  Prometheus        Grafana          Jaeger
-                  (metrics)        (dashboards)     (traces)
+              ┌────────────────────────┼────────────────────────┐
+              │                        │                        │
+         Prometheus               Grafana                    Jaeger
+         (metrics)               (dashboards)               (traces)
+              │
+         AlertManager
+         (Slack alerts)
 
+  Log pipeline:
+  API/Worker → Logstash (UDP) → Elasticsearch → Kibana
 
   Inference path:
   Worker → BentoML Model Server → prediction → webhook callback
@@ -83,26 +90,31 @@ Client → POST /events
 - Postgres persistence for webhooks and deliveries
 
 ### Platform Layer (Phase 12–20)
-- **Phase 12** — Multi-stage Docker builds — cut image size from 1.82GB to 341MB, added healthchecks across all services
+- **Phase 12** — Multi-stage Docker builds — cut image size from 1.82GB to 341MB, healthchecks across all services
 - **Phase 13** — Environment-based config, no hardcoded secrets anywhere in the codebase
 - **Phase 14** — Structured JSON logging across API and worker with timestamps, service names, and event context
 - **Phase 15** — Prometheus metrics: `events_received`, `delivery_success`, `delivery_failed`, `delivery_latency`, `queue_depth`
-- **Phase 16** — Grafana + Prometheus stack running in Docker Compose, both services scraping API and worker separately
-- **Phase 17** — Full Kubernetes migration with Deployments, Services, ConfigMaps, Secrets for all 5 services
+- **Phase 16** — Grafana + Prometheus stack, both scraping API and worker separately
+- **Phase 17** — Full Kubernetes migration with Deployments, Services, ConfigMaps, Secrets
 - **Phase 18** — HorizontalPodAutoscaler on workers — scales 2→5 pods based on CPU utilization
-- **Phase 19** — GitHub Actions CI pipeline: lint → test → build on every push
+- **Phase 19** — GitHub Actions CI pipeline: lint → test → security scan → build on every push
 - **Phase 20** — CD pipeline pushing images to GitHub Container Registry on merge to main
 
 ### Observability + Hardening (Phase 23–26)
-- **Phase 23** — Distributed tracing with OpenTelemetry + Jaeger — full trace across API ingestion, queue push, and worker delivery
-- **Phase 24** — Retry with exponential backoff (2s, 4s, 8s), dead letter queue for exhausted deliveries, circuit breaker that stops hammering unhealthy endpoints
-- **Phase 25** — k6 load test: 23,402 requests, 155 req/s sustained, p(95)=377ms, 0.00% failure rate
-- **Phase 26** — AI failure diagnostics: Janitor service watches Kubernetes pod events, fetches crash logs, sends to Llama 3 via Ollama, returns root cause + fix suggestion
+- **Phase 23** — Distributed tracing with OpenTelemetry + Jaeger — full trace across API ingestion and worker delivery
+- **Phase 24** — Retry with exponential backoff (2s, 4s, 8s), dead letter queue, circuit breaker
+- **Phase 25** — k6 load test: 23,402 requests, 155 req/s, p(95)=377ms, 0.00% failure rate
+- **Phase 26** — AI failure diagnostics: Janitor watches pod events, fetches crash logs, sends to Llama 3, returns root cause + fix
 
 ### Intelligence + Security (Phase 27–29)
-- **Phase 27** — Adaptive rate limiting: tracks per-endpoint success rate and latency, computes an endpoint health score, automatically increases or decreases delivery rate. TCP-style congestion control without ML
-- **Phase 28** — DevSecOps: Trivy container scanning in CI pipeline (fails build on critical CVEs), payload sanitization layer strips dangerous keys and script injection before queuing
-- **Phase 29** — Async AI inference gateway: events with `event_type: inference.requested` are routed to a BentoML model server, predictions are returned and delivered back via webhook callback. Your webhook platform becomes async ML infrastructure
+- **Phase 27** — Adaptive rate limiting: tracks per-endpoint health score (`success_rate * latency_factor`), automatically adjusts delivery rate. TCP-style congestion control
+- **Phase 28** — Trivy container scanning in CI (fails build on critical CVEs), payload sanitization strips dangerous keys and XSS patterns before queuing
+- **Phase 29** — Async AI inference gateway: `inference.requested` events route to BentoML model server, predictions delivered back via webhook callback
+
+### Production Operations (Phase 30–32)
+- **Phase 30** — AlertManager wired to Prometheus with Slack notifications — fires on `WorkerDown`, `APIDown`, `HighDeliveryFailureRate`, `HighQueueDepth`
+- **Phase 31** — ELK Stack: structured JSON logs ship via UDP to Logstash, indexed in Elasticsearch by service (`nexus-api-*`, `nexus-worker-*`), searchable in Kibana
+- **Phase 32** — Helm chart packaging all Kubernetes resources — one command install, upgrade, rollback with full revision history
 
 ---
 
@@ -127,6 +139,7 @@ checks passed:   100%
 git clone https://github.com/kavangowda69/nexus-webhook-platform
 cd nexus-webhook-platform
 cp .env.example .env
+# Add your SLACK_WEBHOOK_URL to .env
 docker compose up
 ```
 
@@ -138,6 +151,8 @@ docker compose up
 | Grafana | http://localhost:3000 (admin/admin) |
 | Prometheus | http://localhost:9091 |
 | Jaeger | http://localhost:16686 |
+| Kibana | http://localhost:5601 |
+| AlertManager | http://localhost:9093 |
 | Inference Server | http://localhost:3001 |
 
 **Register a webhook:**
@@ -167,9 +182,9 @@ curl -X POST http://localhost:8000/events \
 
 ---
 
-## Running on Kubernetes
+## Running on Kubernetes with Helm
 
-**Prerequisites:** minikube, kubectl
+**Prerequisites:** minikube, kubectl, helm
 ```bash
 minikube start --driver=docker --memory=4096 --cpus=2
 eval $(minikube docker-env)
@@ -178,24 +193,36 @@ docker build -f dockerfile -t nexus-webhook-api:latest .
 docker build -f dockerfile -t nexus-webhook-worker:latest .
 docker build -f Dockerfile.receiver -t nexus-webhook-receiver:latest .
 
-kubectl apply -f k8s/
-minikube service api-service --url
-```
+# Install
+helm install nexus helm/nexus
 
-**Check autoscaling:**
-```bash
-kubectl get hpa
-# NAME                 REFERENCE                   TARGETS      MINPODS   MAXPODS   REPLICAS
-# webhook-worker-hpa   Deployment/webhook-worker   cpu: 8%/50%  2         5         2
+# Check status
+helm list
+kubectl get pods
+
+# Scale workers
+helm upgrade nexus helm/nexus --set worker.replicas=3
+
+# Rollback
+helm rollback nexus 1
 ```
 
 ---
 
+## Alerting
+
+AlertManager fires Slack alerts for:
+
+| Alert | Condition | Severity |
+|---|---|---|
+| WorkerDown | Worker not scraping for 30s | Critical |
+| APIDown | API not scraping for 30s | Critical |
+| HighDeliveryFailureRate | >0.1 failures/s for 1min | Critical |
+| HighQueueDepth | Queue depth >50 for 1min | Warning |
+
+---
+
 ## AI Failure Diagnostics
-
-The janitor service runs outside the cluster, watches for pod failures, and uses a local LLM to explain what went wrong.
-
-**Prerequisites:** Ollama installed (`brew install ollama`)
 ```bash
 ollama serve
 ollama pull llama3
@@ -206,46 +233,27 @@ python3 janitor.py
 
 Example output:
 ```
-============================================================
 FAILURE DETECTED: webhook-worker-abc123
 Reason: CrashLoopBackOff | Restarts: 5
-============================================================
 
 AI DIAGNOSIS:
 Root cause: Memory pressure detected. Large payload processing
 caused the worker to exceed its 256Mi memory limit.
 
 Suggested fix: Increase memory limit from 256Mi to 512Mi in
-k8s/worker.yml and redeploy.
-============================================================
+helm/nexus/values.yaml and run helm upgrade nexus helm/nexus.
 ```
 
 ---
 
 ## Security
 
-**Container scanning** runs on every CI push via Trivy. The pipeline fails if any critical, fixable CVEs are found in the built images.
-
-**Payload sanitization** strips sensitive keys (`password`, `token`, `api_key`, `secret`, etc.) and script injection patterns from every incoming event payload before it reaches the queue.
-
 CI pipeline order:
 ```
-Lint → Test → Container Security Scan → Build → Push
+Lint → Test → Container Security Scan (Trivy) → Build → Push
 ```
 
----
-
-## CI/CD
-
-Every push to `main` triggers the full pipeline:
-
-1. **Lint** — flake8 across all Python source files
-2. **Test** — pytest with live Postgres and Redis service containers
-3. **Security Scan** — Trivy scans each Docker image for critical CVEs
-4. **Build** — all three images built and verified
-5. **Push** — images pushed to GitHub Container Registry
-
-Images: `ghcr.io/kavangowda69/nexus-webhook-*`
+Trivy fails the build on any critical, fixable CVE found in Docker images. Payload sanitization strips sensitive keys and script injection from every event before it hits the queue.
 
 ---
 
@@ -255,11 +263,11 @@ nexus-webhook-platform/
 ├── api/
 │   ├── main.py              # FastAPI app, all routes
 │   ├── worker/
-│   │   └── worker.py        # Delivery worker, retry, circuit breaker,
+│   │   └── worker.py        # Delivery, retry, circuit breaker,
 │   │                        # adaptive rate limiting, inference routing
 │   ├── models/              # SQLAlchemy models
-│   ├── database/            # DB connection and session
-│   ├── logger.py            # Structured JSON logging
+│   ├── database/            # DB connection
+│   ├── logger.py            # Structured JSON + Logstash UDP shipping
 │   ├── metrics.py           # Prometheus counters and histograms
 │   ├── tracing.py           # OpenTelemetry setup
 │   └── sanitizer.py         # Payload sanitization
@@ -268,26 +276,28 @@ nexus-webhook-platform/
 │   └── Dockerfile
 ├── janitor/
 │   └── janitor.py           # AI-powered pod failure diagnostics
-├── k8s/                     # Kubernetes manifests
-│   ├── api.yml
-│   ├── worker.yml
-│   ├── hpa.yml
-│   ├── postgres.yml
-│   ├── redis.yml
-│   ├── receiver.yml
-│   ├── configmap.yml
-│   └── secret.yml
+├── helm/
+│   └── nexus/               # Helm chart
+│       ├── Chart.yaml
+│       ├── values.yaml
+│       └── templates/
+├── k8s/                     # Raw Kubernetes manifests
+├── logstash/
+│   └── pipeline/
+│       └── nexus.conf       # Logstash pipeline config
 ├── tests/
 │   ├── test_api.py          # pytest unit tests
-│   └── load_test.js         # k6 load test scenarios
+│   └── load_test.js         # k6 load test
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml           # lint, test, security scan, build
+│       ├── ci.yml           # lint, test, trivy, build
 │       └── cd.yml           # push to GHCR
 ├── grafana/                 # Grafana datasource provisioning
 ├── prometheus.yml           # Prometheus scrape config
-├── dockerfile               # Multi-stage build for API and worker
-├── Dockerfile.receiver      # Multi-stage build for receiver
+├── prometheus_rules.yml     # Alert rules
+├── alertmanager.yml         # AlertManager + Slack config
+├── dockerfile               # Multi-stage API/worker image
+├── Dockerfile.receiver      # Multi-stage receiver image
 └── docker-compose.yml       # Full local dev stack
 ```
 
@@ -297,8 +307,10 @@ nexus-webhook-platform/
 
 - Distributed event processing with queue-based job routing
 - Production containerization and image optimization
-- Kubernetes orchestration with horizontal autoscaling
-- Full observability stack: metrics, logs, traces
+- Kubernetes orchestration with Helm and horizontal autoscaling
+- Full observability: metrics, structured logs, distributed traces
+- Centralized log aggregation with ELK stack
+- Real-time alerting with AlertManager and Slack
 - CI/CD pipeline with security scanning baked in
 - Adaptive systems design — rate limiting that responds to real endpoint behavior
 - AIOps — automated failure diagnosis using local LLMs

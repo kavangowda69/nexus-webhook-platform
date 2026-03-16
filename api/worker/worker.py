@@ -8,6 +8,7 @@ import redis
 from sqlalchemy.orm import Session
 from opentelemetry import trace
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
+from prometheus_client import start_http_server
 
 from api.database.database import SessionLocal
 from api.models.delivery import Delivery
@@ -367,7 +368,8 @@ def process_job(job_data):
 # ----------------------------
 
 def start_worker():
-    logger.info("worker.started")
+    start_http_server(9090)
+    logger.info("worker.started metrics_port=9090")
 
     last_second = int(time.time())
     processed_this_second = 0

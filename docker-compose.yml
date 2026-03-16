@@ -88,6 +88,10 @@ services:
       - "9091:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus_rules.yml:/etc/prometheus/prometheus_rules.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.enable-lifecycle'
     depends_on:
       - webhook_api
       - webhook_worker
@@ -126,3 +130,15 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+    depends_on:
+      - prometheus

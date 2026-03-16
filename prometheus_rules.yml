@@ -1,0 +1,35 @@
+groups:
+  - name: nexus_alerts
+    rules:
+
+      - alert: HighDeliveryFailureRate
+        expr: rate(webhook_delivery_failed_total[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          description: "Webhook delivery failure rate is above 0.1/s for the last minute"
+
+      - alert: HighQueueDepth
+        expr: webhook_queue_depth > 50
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          description: "Webhook queue depth is above 50 jobs"
+
+      - alert: APIDown
+        expr: up{job="webhook_api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          description: "Webhook API is not responding to Prometheus scrapes"
+
+      - alert: WorkerDown
+        expr: up{job="webhook_worker"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          description: "Webhook worker is not responding to Prometheus scrapes"

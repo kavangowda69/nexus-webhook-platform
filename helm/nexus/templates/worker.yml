@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: webhook-worker
+  template:
+    metadata:
+      labels:
+        app: webhook-worker
+    spec:
+      containers:
+        - name: webhook-worker
+          image: {{ .Values.worker.image }}:{{ .Values.worker.tag }}
+          imagePullPolicy: Never
+          command: ["python", "-m", "api.worker.worker"]
+          envFrom:
+            - configMapRef:
+                name: nexus-config
+            - secretRef:
+                name: nexus-secret
+          ports:
+            - containerPort: {{ .Values.worker.port }}
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"

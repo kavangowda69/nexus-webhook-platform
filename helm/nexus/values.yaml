@@ -1,0 +1,39 @@
+api:
+  image: nexus-webhook-api
+  tag: latest
+  replicas: 1
+  port: 8000
+
+worker:
+  image: nexus-webhook-worker
+  tag: latest
+  replicas: 2
+  port: 9090
+
+receiver:
+  image: nexus-webhook-receiver
+  tag: latest
+  replicas: 1
+  port: 8001
+
+postgres:
+  image: postgres
+  tag: "15"
+  user: webhook_user
+  password: webhook_pass
+  db: webhook_db
+
+redis:
+  image: redis
+  tag: "7"
+
+config:
+  logLevel: INFO
+  rateLimit: "10"
+  redisHost: redis-service
+  redisPort: "6379"
+
+hpa:
+  minReplicas: 2
+  maxReplicas: 5
+  cpuUtilization: 50

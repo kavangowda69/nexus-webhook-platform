@@ -59,6 +59,7 @@ jobs:
           sudo mv argocd /usr/local/bin/
 
       - name: Sync ArgoCD Application
+        continue-on-error: true
         run: |
           argocd app sync nexus \
             --server ${{ secrets.ARGOCD_SERVER }} \

@@ -3,7 +3,9 @@ kind: Deployment
 metadata:
   name: webhook-worker
 spec:
+  {{- if not (default false .Values.worker.autoscaling.enabled) }}
   replicas: {{ .Values.worker.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       app: webhook-worker
@@ -31,3 +33,14 @@ spec:
             limits:
               cpu: "250m"
               memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-metrics-service
+spec:
+  selector:
+    app: webhook-worker
+  ports:
+    - port: 9090
+      targetPort: 9090

@@ -1,0 +1,21 @@
+RUNBOOK: POD_CRASH
+
+Symptoms:
+- Pod in CrashLoopBackOff state
+- Restart count exceeding threshold
+- OOMKilled or Error exit codes
+
+Root Causes:
+- Memory limit exceeded (OOMKilled)
+- Unhandled exception in application code
+- Missing environment variables or secrets
+- Database connection failure on startup
+
+Remediation Steps:
+1. Fetch last 50 log lines from crashed pod
+2. Send logs to LLM for root cause analysis
+3. If OOMKilled: increase memory limit in deployment
+4. If connection error: verify Redis and Postgres health
+5. If code error: alert only, do not auto-restart
+
+Cooldown: 120 seconds between restart attempts

@@ -7,8 +7,14 @@ api:
 worker:
   image: nexus-webhook-worker
   tag: latest
-  replicas: 2
+  replicas: 2   
   port: 9090
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    cpuUtilization: 50
 
 receiver:
   image: nexus-webhook-receiver
@@ -33,7 +39,13 @@ config:
   redisHost: redis-service
   redisPort: "6379"
 
-hpa:
-  minReplicas: 2
-  maxReplicas: 5
-  cpuUtilization: 50
+
+
+aiops:
+  image: nexus-aiops
+  tag: latest
+  enabled: true
+  interval: 30
+  prometheusUrl: "http://prometheus:9091"
+  elasticsearchUrl: "http://elasticsearch:9200"
+  ollamaUrl: "http://host.minikube.internal:11434/api/generate"

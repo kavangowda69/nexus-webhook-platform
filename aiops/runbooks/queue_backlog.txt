@@ -1,0 +1,19 @@
+RUNBOOK: QUEUE_BACKLOG
+
+Symptoms:
+- Queue depth exceeding 5000 jobs
+- Delivery latency p95 above 400ms
+- Queue depth rate increasing
+
+Root Causes:
+- Worker pod saturation (insufficient replicas)
+- Slow downstream endpoints causing worker blocking
+- Redis connection pool exhaustion
+
+Remediation Steps:
+1. Scale worker deployment up by 2 replicas
+2. Check downstream endpoint health via circuit breaker metrics
+3. If scaling does not resolve within 5 minutes, escalate to on-call
+
+Cooldown: 300 seconds between scaling actions
+Max replicas: 8

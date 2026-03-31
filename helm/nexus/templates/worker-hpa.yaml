@@ -1,4 +1,4 @@
-{{- if (default false .Values.worker.autoscaling.enabled) }}
+{{- if .Values.worker.autoscaling.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -8,13 +8,13 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: webhook-worker
-  minReplicas: {{ default 2 .Values.worker.autoscaling.minReplicas }}
-  maxReplicas: {{ default 5 .Values.worker.autoscaling.maxReplicas }}
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: {{ default 50 .Values.worker.autoscaling.cpuUtilization }}
+          averageUtilization: {{ .Values.worker.autoscaling.cpuUtilization }}
 {{- end }}

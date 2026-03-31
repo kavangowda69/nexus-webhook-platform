@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aiops-engine
+  template:
+    metadata:
+      labels:
+        app: aiops-engine
+    spec:
+      serviceAccountName: aiops-service-account
+      containers:
+        - name: aiops
+          image: nexus-aiops:latest
+          imagePullPolicy: Never
+          env:
+            - name: PROMETHEUS_URL
+              value: "http://prometheus:9090"
+            - name: ELASTICSEARCH_URL
+              value: "http://elasticsearch:9200"
+            - name: OLLAMA_URL
+              value: "http://host.minikube.internal:11434/api/generate"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nexus-secret
+                  key: DATABASE_URL

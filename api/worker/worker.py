@@ -14,8 +14,8 @@ from api.database.database import SessionLocal
 from api.models.delivery import Delivery
 from api.models.webhook import Webhook
 from api.logger import get_logger
-from api.metrics import DELIVERIES_SUCCESS, DELIVERIES_FAILED, DELIVERY_LATENCY
 from api.tracing import setup_tracing
+from api.metrics import DELIVERIES_SUCCESS, DELIVERIES_FAILED, DELIVERY_LATENCY, QUEUE_DEPTH
 
 
 logger = get_logger("worker")
@@ -389,6 +389,11 @@ def start_worker():
             continue
 
         queues = redis_client.keys("webhook_queue_*")
+
+        # Update queue depth metric for AIOps
+        total_depth = sum(redis_client.llen(q) for q in queues)
+        QUEUE_DEPTH.set(total_depth)
+
         if not queues:
             time.sleep(0.1)
             continue

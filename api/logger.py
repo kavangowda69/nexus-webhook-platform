@@ -17,8 +17,30 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "event": record.getMessage(),
         }
+
+        # Add error_type for AIOps analyzer
+        msg = record.getMessage().lower()
+        if "timeout" in msg:
+            log_entry["error_type"] = "timeout"
+        elif "crash" in msg or "crashloop" in msg:
+            log_entry["error_type"] = "crash"
+        elif "retry" in msg:
+            log_entry["error_type"] = "retry"
+        elif "oom" in msg or "memory" in msg:
+            log_entry["error_type"] = "oom"
+        elif "connection" in msg:
+            log_entry["error_type"] = "connection"
+        elif record.levelname == "ERROR":
+            log_entry["error_type"] = "error"
+
+        # Add trace_id if available
+        trace_id = getattr(record, "trace_id", None)
+        if trace_id:
+            log_entry["trace_id"] = trace_id
+
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
+
         return json.dumps(log_entry)
 
 
@@ -44,12 +66,10 @@ def get_logger(service_name: str) -> logging.Logger:
     logger.setLevel(getattr(logging, log_level, logging.INFO))
 
     if not logger.handlers:
-        # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(JSONFormatter(service_name))
         logger.addHandler(console_handler)
 
-        # Logstash UDP handler
         logstash_host = os.getenv("LOGSTASH_HOST", "logstash")
         logstash_port = int(os.getenv("LOGSTASH_PORT", 5000))
         udp_handler = UDPLogstashHandler(logstash_host, logstash_port)

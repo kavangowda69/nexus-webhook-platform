@@ -32,3 +32,16 @@ QUEUE_DEPTH = Gauge(
     "webhook_queue_depth",
     "Current number of jobs in redis queues"
 )
+
+# AIOps metrics
+AIOPS_INCIDENTS_DETECTED = Counter(
+    "aiops_incidents_detected_total",
+    "Total incidents detected by AIOps engine",
+    ["incident_type"]
+)
+
+AIOPS_ACTIONS_EXECUTED = Counter(
+    "aiops_actions_executed_total",
+    "Total actions executed by AIOps engine",
+    ["action", "outcome"]
+)

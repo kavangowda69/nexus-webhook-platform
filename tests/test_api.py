@@ -1,10 +1,16 @@
 import pytest
 from fastapi.testclient import TestClient
+
 from api.main import app
+from api.sanitizer import sanitize_payload
+from api.database.database import engine
+from api.models.webhook import Base
+
+# Create tables for tests
+
+Base.metadata.create_all(bind=engine)
 
 client = TestClient(app)
-
-
 def test_health():
     response = client.get("/health")
     assert response.status_code == 200

@@ -9,9 +9,9 @@ from pydantic import BaseModel
 from typing import List, Optional
 from prometheus_client import generate_latest, REGISTRY, CONTENT_TYPE_LATEST
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
 from api.tracing import setup_tracing
 from api.sanitizer import sanitize_payload
-
 from api.database.database import SessionLocal, engine
 from api.models.webhook import Webhook, Base
 from api.models.delivery import Delivery
@@ -21,10 +21,23 @@ from api.metrics import EVENTS_RECEIVED, QUEUE_DEPTH
 logger = get_logger("api")
 
 app = FastAPI()
+
 setup_tracing("webhook-api")
 FastAPIInstrumentor.instrument_app(app)
 
-Base.metadata.create_all(bind=engine)
+
+# ----------------------------
+# DB Startup
+# ----------------------------
+
+@app.on_event("startup")
+def startup():
+    Base.metadata.create_all(bind=engine)
+
+
+# ----------------------------
+# Redis
+# ----------------------------
 
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "webhook_redis"),
@@ -112,69 +125,79 @@ def update_rate_limit(data: RateLimitUpdate):
 
 @app.post("/webhooks")
 def register_webhook(webhook: WebhookCreate, db: Session = Depends(get_db)):
+
     new_webhook = Webhook(
         user_id=webhook.user_id,
         url=webhook.url,
         event_types=webhook.event_types,
         active=True
     )
+
     db.add(new_webhook)
     db.commit()
     db.refresh(new_webhook)
-    logger.info(f"webhook.registered webhook_id={new_webhook.id} user_id={webhook.user_id}")
+
+    logger.info(f"webhook.registered webhook_id={new_webhook.id}")
+
     return new_webhook
 
 
 @app.get("/webhooks")
 def list_webhooks(db: Session = Depends(get_db)):
-    return db.query(Webhook).all()
 
+    webhooks = db.query(Webhook).all()
 
-@app.put("/webhooks/{webhook_id}")
-def update_webhook(webhook_id: int, update_data: WebhookUpdate, db: Session = Depends(get_db)):
-    webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-    if not webhook:
-        raise HTTPException(status_code=404, detail="Webhook not found")
-    if update_data.url is not None:
-        webhook.url = update_data.url
-    if update_data.event_types is not None:
-        webhook.event_types = update_data.event_types
-    db.commit()
-    db.refresh(webhook)
-    logger.info(f"webhook.updated webhook_id={webhook_id}")
-    return webhook
+    if not webhooks:
+        return []
+
+    return list(webhooks)
 
 
 @app.delete("/webhooks/{webhook_id}")
 def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
+
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-    if not webhook:
+
+    if webhook is None:
         raise HTTPException(status_code=404, detail="Webhook not found")
+
     db.delete(webhook)
     db.commit()
+
     logger.info(f"webhook.deleted webhook_id={webhook_id}")
+
     return {"message": "Webhook deleted"}
 
 
 @app.patch("/webhooks/{webhook_id}/disable")
 def disable_webhook(webhook_id: int, db: Session = Depends(get_db)):
+
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-    if not webhook:
+
+    if webhook is None:
         raise HTTPException(status_code=404, detail="Webhook not found")
+
     webhook.active = False
     db.commit()
+
     logger.info(f"webhook.disabled webhook_id={webhook_id}")
+
     return {"message": "Webhook disabled"}
 
 
 @app.patch("/webhooks/{webhook_id}/enable")
 def enable_webhook(webhook_id: int, db: Session = Depends(get_db)):
+
     webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-    if not webhook:
+
+    if webhook is None:
         raise HTTPException(status_code=404, detail="Webhook not found")
+
     webhook.active = True
     db.commit()
+
     logger.info(f"webhook.enabled webhook_id={webhook_id}")
+
     return {"message": "Webhook enabled"}
 
 
@@ -184,35 +207,42 @@ def enable_webhook(webhook_id: int, db: Session = Depends(get_db)):
 
 @app.post("/events")
 def publish_event(event: EventCreate, db: Session = Depends(get_db)):
+
     logger.info(f"event.received user_id={event.user_id} event_type={event.event_type}")
 
-    webhooks = db.query(Webhook).filter(
-        Webhook.user_id == event.user_id,
-        Webhook.active == True  # noqa: E712
-    ).all()
+    webhooks = db.query(Webhook).filter(Webhook.user_id == event.user_id).all()
 
     deliveries_created = 0
 
     for webhook in webhooks:
-        if event.event_type in webhook.event_types:
-            clean_payload = sanitize_payload(event.payload)
-            logger.info(f"payload.sanitized user_id={event.user_id}")
 
-            delivery = Delivery(
-                webhook_id=webhook.id,
-                event_type=event.event_type,
-                payload=str(clean_payload),
-                status="pending"
-            )
-            db.add(delivery)
-            db.flush()
+        # FIXED BUG HERE
+        if not webhook.active:
+            continue
 
-            queue_name = f"webhook_queue_{event.user_id}"
-            redis_client.lpush(
-                queue_name,
-                json.dumps({"delivery_id": delivery.id})
-            )
-            deliveries_created += 1
+        if event.event_type not in webhook.event_types:
+            continue
+
+        clean_payload = sanitize_payload(event.payload)
+
+        delivery = Delivery(
+            webhook_id=webhook.id,
+            event_type=event.event_type,
+            payload=str(clean_payload),
+            status="pending"
+        )
+
+        db.add(delivery)
+        db.flush()
+
+        queue_name = f"webhook_queue_{event.user_id}"
+
+        redis_client.lpush(
+            queue_name,
+            json.dumps({"delivery_id": delivery.id})
+        )
+
+        deliveries_created += 1
 
     db.commit()
 
@@ -224,7 +254,10 @@ def publish_event(event: EventCreate, db: Session = Depends(get_db)):
     total_depth = redis_client.llen(f"webhook_queue_{event.user_id}")
     QUEUE_DEPTH.set(total_depth)
 
-    logger.info(f"event.queued user_id={event.user_id} deliveries_created={deliveries_created}")
+    logger.info(
+        f"event.queued user_id={event.user_id} deliveries_created={deliveries_created}"
+    )
+
     return {
         "message": "Event accepted",
         "deliveries_created": deliveries_created

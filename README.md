@@ -1,27 +1,36 @@
-# Nexus — Webhook Delivery Platform
+# Nexus — Autonomous Webhook Delivery Platform
 
-A production-grade distributed webhook delivery system built phase by phase — from a basic FastAPI app to a full platform with Kubernetes, observability, security scanning, adaptive rate limiting, async AI inference routing, alerting, centralized logging, Helm packaging, GitOps delivery via ArgoCD, and AWS deployment via Terraform.
+A production-grade distributed webhook delivery system that evolved from a basic event processor into a self-healing, self-analyzing platform with autonomous incident remediation, ML inference routing, and a full DevSecOps pipeline.
 
-This isn't a tutorial project. It's a working system that handles real load (23k requests, 0% failure rate under test), deployed and verified on AWS EKS, with full GitOps via ArgoCD.
+Built phase by phase — every component exists for a reason, every decision is documented, every service has been deployed and verified on real infrastructure.
 
 ---
 
 ## What it does
 
-Clients register webhooks and publish events. Nexus queues the deliveries, routes them to the right endpoints, retries on failure, backs off when endpoints go down, and adapts its delivery rate based on endpoint health. Every request is traced end to end. Every failure is logged in structured JSON and searchable in Kibana. Alerts fire to Slack when things go wrong. The whole thing runs on Kubernetes with autoscaling — locally via Helm or on AWS EKS via Terraform — synced automatically via ArgoCD GitOps, and if a pod crashes, an AI diagnostics service tells you why.
+Clients register webhooks and publish events. Nexus queues deliveries per user with fairness scheduling, routes them to endpoints with retry and exponential backoff, adapts delivery rate based on real-time endpoint health, and recovers automatically from failures using circuit breaking and dead letter queues.
+
+While all this runs, an autonomous AIOps engine watches the entire system — detecting anomalies in Prometheus metrics, analyzing root causes using LLM intelligence, planning remediation actions, enforcing safety policies, executing fixes, verifying outcomes, and storing institutional memory in Postgres. When the system detects a problem it solves it. When it can't solve it safely, it escalates to a human with a full diagnosis already written.
 ```
 Client → POST /events
            │
            ▼
-       FastAPI API  ──→  Payload Sanitization
+       FastAPI API ──→ Payload Sanitization
            │
-       Redis Queue (per user, round-robin fairness)
+       Redis Queue (per-user, round-robin fairness)
            │
-       Worker Cluster (2–5 pods, autoscaled)
+       Worker Cluster (2–5 pods, HPA autoscaled)
            │         │
-           │         └──→ inference.requested → BentoML Model Server
+           │         └──→ inference.requested → BentoML Model Server → prediction callback
            │
        Webhook Endpoint
+           │
+       ┌───────────────────────────────────┐
+       │         AIOps Engine              │
+       │  Detect → Analyze → Plan →        │
+       │  Policy → Execute → Verify →      │
+       │  Memory (every 30 seconds)        │
+       └───────────────────────────────────┘
 ```
 
 ---
@@ -38,11 +47,11 @@ Client → POST /events
 | Cloud | AWS EKS, ECR, VPC, IAM |
 | IaC | Terraform |
 | Observability | Prometheus, Grafana, Jaeger (OpenTelemetry) |
-| Log Aggregation | Elasticsearch, Logstash, Kibana (ELK) |
+| Log Aggregation | Elasticsearch, Logstash, Kibana |
 | Alerting | AlertManager, Slack |
+| AIOps | Kubernetes Python client, Ollama, Llama 3, Prometheus API, ELK API |
 | CI/CD | GitHub Actions, GitHub Container Registry |
 | Security | Trivy container scanning, payload sanitization |
-| AIOps | Ollama, Llama 3 |
 | ML Inference | BentoML |
 | Load testing | k6 |
 
@@ -50,101 +59,178 @@ Client → POST /events
 
 ## Architecture
 ```
-                        ┌──────────────────────────────────────┐
-                        │     Kubernetes Cluster                │
-                        │     (minikube local / AWS EKS)        │
-                        │                                      │
-  Client                │  ┌──────────┐    ┌───────────────┐  │
-    │                   │  │   API    │    │    Worker     │  │
-    │ POST /events       │  │  (pods)  │    │  (2–5 pods)   │  │
-    └──────────────────▶│  └────┬─────┘    └──────┬────────┘  │
-                        │       │                  │           │
-                        │       ▼                  ▼           │
-                        │  ┌─────────┐    ┌──────────────┐    │
-                        │  │  Redis  │───▶│   Postgres   │    │
-                        │  └─────────┘    └──────────────┘    │
-                        │                                      │
-                        └──────────────────────────────────────┘
+                        ┌──────────────────────────────────────────┐
+                        │       Kubernetes Cluster                  │
+                        │       (minikube / AWS EKS)                │
+                        │                                          │
+  Client                │  ┌──────────┐    ┌───────────────┐      │
+    │                   │  │   API    │    │    Worker     │      │
+    │ POST /events       │  │  (pods)  │    │  (2–5 pods)   │      │
+    └──────────────────▶│  └────┬─────┘    └──────┬────────┘      │
+                        │       │                  │               │
+                        │       ▼                  ▼               │
+                        │  ┌─────────┐    ┌──────────────┐        │
+                        │  │  Redis  │───▶│   Postgres   │        │
+                        │  └─────────┘    └──────────────┘        │
+                        │                                          │
+                        │  ┌────────────────────────────────────┐  │
+                        │  │           AIOps Engine             │  │
+                        │  │  Every 30s:                        │  │
+                        │  │  Prometheus → detect anomalies     │  │
+                        │  │  ELK → fetch error logs            │  │
+                        │  │  Ollama/Llama3 → root cause        │  │
+                        │  │  Planner → map to action           │  │
+                        │  │  Policy → enforce safety gates     │  │
+                        │  │  Executor → scale/restart/alert    │  │
+                        │  │  Verifier → confirm resolution     │  │
+                        │  │  Memory → store in Postgres        │  │
+                        │  └────────────────────────────────────┘  │
+                        └──────────────────────────────────────────┘
                                        │
               ┌────────────────────────┼────────────────────────┐
               │                        │                        │
          Prometheus               Grafana                    Jaeger
          (metrics)               (dashboards)               (traces)
               │
-         AlertManager
-         (Slack alerts)
+         AlertManager → Slack
 
-  GitOps pipeline:
-  git push → GitHub Actions (CI) → image pushed to GHCR
-                                          │
-                                      ArgoCD detects change
-                                          │
-                                      Auto-syncs Helm chart to Kubernetes
-
-  Log pipeline:
-  API/Worker → Logstash (UDP) → Elasticsearch → Kibana
-
-  Inference path:
-  Worker → BentoML Model Server → prediction → webhook callback
-
-  Cloud infrastructure (Terraform):
-  VPC → EKS Cluster → Node Group (t3.medium x2)
-                   └→ ECR (3 repositories)
+  GitOps: git push → CI → GHCR → ArgoCD → Kubernetes
+  Cloud:  Terraform → VPC + EKS + ECR (ap-south-1, verified)
+  Logs:   API/Worker → Logstash UDP → Elasticsearch → Kibana
 ```
+
+---
+
+## AIOps Engine
+
+The most advanced component. A fully autonomous Detect → Analyze → Plan → Policy → Execute → Verify → Memory loop running every 30 seconds inside Kubernetes.
+
+### What it detects
+- `POD_CRASH` — CrashLoopBackOff, OOMKilled, Error states via Kubernetes Python client
+- `QUEUE_BACKLOG` — queue depth > 5000 AND latency p95 > 400ms simultaneously
+- `HIGH_FAILURE_RATE` — delivery failure rate exceeding threshold
+
+### How it works
+```
+1. DETECT    — Kubernetes Python client scans pod states
+               Prometheus API fetches queue_depth, latency_p95, failure_rate
+
+2. ANALYZE   — ELK fetches last 2 minutes of ERROR/WARNING logs
+               Ollama/Llama3 receives structured prompt with metrics + logs
+               Returns: { root_causes: [{cause, confidence}], explanation }
+
+3. PLAN      — Maps root causes to actions:
+               worker_saturation → scale_workers
+               pod_crash         → restart_pod
+               db_latency        → alert_only
+
+4. POLICY    — Safety gates before any action:
+               min_confidence = 0.75 (rejects low-confidence actions)
+               cooldown = 300s (prevents action storms)
+               max_worker_pods = 8
+
+5. EXECUTE   — AUTO_EXECUTE: scales deployment via Kubernetes API
+               REQUIRES_APPROVAL: logs for human review
+               REJECT: skips with reason logged
+
+6. VERIFY    — Waits 30s, re-fetches metrics
+               Checks if queue ↓, latency ↓, failures ↓
+               Returns RESOLVED or ESCALATE
+
+7. MEMORY    — Stores every incident in Postgres:
+               (id, timestamp, incident_type, cause, action, outcome)
+               Builds institutional knowledge over time
+```
+
+### What reaches a human
+Only three things escalate to human attention:
+- Confidence below 0.75 — LLM isn't certain enough to act autonomously
+- Verifier returns ESCALATE — the fix didn't work
+- `REQUIRES_APPROVAL` actions — restart_pod requires human sign-off
+
+Everything else is handled automatically.
 
 ---
 
 ## Phases built
 
 ### Application Layer (Phase 0–11)
-- FastAPI REST API with full webhook CRUD
-- Event ingestion and delivery pipeline
-- Redis queue with per-user fairness scheduling (round-robin)
-- Global rate limiting with dynamic control via API
+- FastAPI REST API with full webhook CRUD (register, list, update, delete, enable, disable)
+- Event ingestion with fan-out to all matching active webhooks
+- Redis queue with per-user fairness scheduling — round-robin across user queues
+- Global rate limiting with runtime configuration via API
 - Mock receiver for local end-to-end testing
-- Postgres persistence for webhooks and deliveries
 
 ### Platform Layer (Phase 12–20)
-- **Phase 12** — Multi-stage Docker builds — cut image size from 1.82GB to 341MB, healthchecks across all services
-- **Phase 13** — Environment-based config, no hardcoded secrets anywhere in the codebase
-- **Phase 14** — Structured JSON logging across API and worker with timestamps, service names, and event context
-- **Phase 15** — Prometheus metrics: `events_received`, `delivery_success`, `delivery_failed`, `delivery_latency`, `queue_depth`
-- **Phase 16** — Grafana + Prometheus stack, both scraping API and worker separately
-- **Phase 17** — Full Kubernetes migration with Deployments, Services, ConfigMaps, Secrets
-- **Phase 18** — HorizontalPodAutoscaler on workers — scales 2→5 pods based on CPU utilization
-- **Phase 19** — GitHub Actions CI pipeline: lint → test → security scan → build on every push
-- **Phase 20** — CD pipeline pushing images to GitHub Container Registry on merge to main
+- **Phase 12** — Multi-stage Docker builds — 1.82GB → 341MB, healthchecks on all services
+- **Phase 13** — Environment-based config, zero hardcoded secrets
+- **Phase 14** — Structured JSON logging with Logstash UDP shipping and error_type classification
+- **Phase 15** — Prometheus metrics: events_received, delivery_success, delivery_failed, latency histograms, queue_depth
+- **Phase 16** — Grafana + Prometheus stack with separate scrape jobs for API and worker
+- **Phase 17** — Full Kubernetes migration: Deployments, Services, ConfigMaps, Secrets, RBAC
+- **Phase 18** — HorizontalPodAutoscaler: workers scale 2→5 pods on CPU utilization
+- **Phase 19** — GitHub Actions CI: lint → test → security scan → build
+- **Phase 20** — CD pipeline: images pushed to GitHub Container Registry on merge
 
 ### Observability + Hardening (Phase 23–26)
-- **Phase 23** — Distributed tracing with OpenTelemetry + Jaeger — full trace across API ingestion and worker delivery
+- **Phase 23** — Distributed tracing: OpenTelemetry → Jaeger, full span propagation across API and worker
 - **Phase 24** — Retry with exponential backoff (2s, 4s, 8s), dead letter queue, circuit breaker
 - **Phase 25** — k6 load test: 23,402 requests, 155 req/s, p(95)=377ms, 0.00% failure rate
-- **Phase 26** — AI failure diagnostics: Janitor watches pod events, fetches crash logs, sends to Llama 3, returns root cause + fix
+- **Phase 26** — Janitor: watches pod events, fetches crash logs, sends to Llama 3, returns diagnosis
 
 ### Intelligence + Security (Phase 27–29)
-- **Phase 27** — Adaptive rate limiting: tracks per-endpoint health score (`success_rate * latency_factor`), automatically adjusts delivery rate — TCP-style congestion control
-- **Phase 28** — Trivy container scanning in CI (fails build on critical CVEs), payload sanitization strips dangerous keys and XSS patterns before queuing
-- **Phase 29** — Async AI inference gateway: `inference.requested` events route to BentoML model server, predictions delivered back via webhook callback
+- **Phase 27** — Adaptive rate limiting: endpoint health score = success_rate × latency_factor, TCP-style congestion control
+- **Phase 28** — Trivy container scanning in CI (blocks on critical CVEs), payload sanitization (sensitive keys + XSS)
+- **Phase 29** — Async ML inference gateway: inference.requested events route to BentoML, predictions delivered via webhook callback
 
 ### Production Operations (Phase 30–34)
-- **Phase 30** — AlertManager wired to Prometheus with Slack notifications — fires on `WorkerDown`, `APIDown`, `HighDeliveryFailureRate`, `HighQueueDepth`
-- **Phase 31** — ELK Stack: structured JSON logs ship via UDP to Logstash, indexed in Elasticsearch by service (`nexus-api-*`, `nexus-worker-*`), searchable in Kibana
-- **Phase 32** — Helm chart packaging all Kubernetes resources — one command install, upgrade, rollback with full revision history
-- **Phase 33** — Terraform IaC provisioning AWS VPC, EKS cluster, ECR repositories, NAT gateways, and IAM roles — deployed and verified in `ap-south-1`, 2 EKS nodes confirmed `Ready`, images pushed to ECR, then destroyed
-- **Phase 34** — ArgoCD GitOps: watches GitHub repo, automatically syncs Helm chart to Kubernetes on every push — full GitOps pipeline from commit to deployment
+- **Phase 30** — AlertManager: Slack alerts for WorkerDown, APIDown, HighDeliveryFailureRate, HighQueueDepth
+- **Phase 31** — ELK Stack: JSON logs ship via UDP → Logstash → Elasticsearch (nexus-api-*, nexus-worker-*) → Kibana
+- **Phase 32** — Helm chart: one-command install, upgrade, rollback with full revision history
+- **Phase 33** — Terraform IaC: VPC, EKS, ECR, NAT gateways, IAM — deployed and verified on AWS ap-south-1
+- **Phase 34** — ArgoCD GitOps: auto-syncs Helm chart to Kubernetes on every push to main
+
+### AIOps Layer (Phase 35)
+- **Phase 35** — Autonomous AIOps engine: Detect → Analyze → Plan → Policy → Execute → Verify → Memory loop running every 30 seconds in Kubernetes with Prometheus metrics, ELK logs, Llama 3 intelligence, Kubernetes Python client for in-cluster operations, and RBAC-controlled deployment scaling
 
 ---
 
 ## Load test results
 ```
-tool:            k6
-stages:          ramp 10 → 50 → 100 VUs over 2m30s
+tool:     k6
+stages:   ramp 10 → 50 → 100 VUs over 2m30s
 
-requests:        23,402
-req/sec:         155
-p(95) latency:   377ms    ✓ threshold <500ms
-failure rate:    0.00%    ✓ threshold <1%
-checks passed:   100%
+requests:       23,402
+req/sec:        155
+p(95) latency:  377ms    ✓ threshold <500ms
+failure rate:   0.00%    ✓ threshold <1%
+checks passed:  100%
+```
+
+---
+
+## Test suite
+
+13 tests covering all critical paths — runs without any services:
+```
+✓ test_health
+✓ test_register_webhook
+✓ test_list_webhooks
+✓ test_delete_webhook_not_found
+✓ test_disable_webhook
+✓ test_enable_webhook
+✓ test_event_queued_per_user          ← verifies per-user queue key
+✓ test_event_not_queued_for_unsubscribed_type
+✓ test_delivery_retries_on_failure    ← verifies 3-attempt retry
+✓ test_dlq                            ← verifies dead letter queue
+✓ test_sanitizer                      ← verifies payload sanitization
+✓ test_get_rate_limit
+✓ test_update_rate_limit
+```
+
+Run:
+```bash
+DATABASE_URL=sqlite:///:memory: REDIS_HOST=localhost pytest tests/ -v
 ```
 
 ---
@@ -190,18 +276,16 @@ curl -X POST http://localhost:8000/events \
 ```bash
 curl -X POST http://localhost:8000/webhooks \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "ai_user", "url": "http://webhook_receiver:8001/test", "event_types": ["inference.requested"]}'
+  -d '{"user_id": "ai", "url": "http://webhook_receiver:8001/test", "event_types": ["inference.requested"]}'
 
 curl -X POST http://localhost:8000/events \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "ai_user", "event_type": "inference.requested", "payload": {"input": "classify this", "model": "echo"}}'
+  -d '{"user_id": "ai", "event_type": "inference.requested", "payload": {"input": "classify this", "model": "echo"}}'
 ```
 
 ---
 
 ## Running on Kubernetes with Helm
-
-**Prerequisites:** minikube, kubectl, helm
 ```bash
 minikube start --driver=docker --memory=4096 --cpus=2
 eval $(minikube docker-env)
@@ -209,75 +293,45 @@ eval $(minikube docker-env)
 docker build -f dockerfile -t nexus-webhook-api:latest .
 docker build -f dockerfile -t nexus-webhook-worker:latest .
 docker build -f Dockerfile.receiver -t nexus-webhook-receiver:latest .
+docker build -f aiops/Dockerfile -t nexus-aiops:latest ./aiops
 
-# Install
 helm install nexus helm/nexus
+kubectl apply -f k8s/prometheus.yml
+kubectl apply -f k8s/aiops.yml
+kubectl apply -f helm/nexus/templates/aiops-rbac.yaml
 
-# Check status
-helm list
 kubectl get pods
+kubectl logs deployment/aiops-engine -f
+```
 
-# Scale workers
+**Scale workers:**
+```bash
 helm upgrade nexus helm/nexus --set worker.replicas=3
+```
 
-# Rollback
-helm rollback nexus 1
+**Watch AIOps in action:**
+```bash
+kubectl run crash-test --image=busybox --restart=Always -- sh -c "exit 1"
+kubectl logs deployment/aiops-engine -f
 ```
 
 ---
 
 ## GitOps with ArgoCD
-
-ArgoCD watches this repository and automatically syncs the Helm chart to Kubernetes on every push. Any change to `helm/nexus/` triggers an automatic deployment.
-
-**Install ArgoCD on your cluster:**
 ```bash
 kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-```
-
-**Deploy the Nexus application:**
-```bash
 kubectl apply -f argocd/nexus-app.yaml
-```
-
-**Access the UI:**
-```bash
 kubectl port-forward svc/argocd-server -n argocd 8080:443
-# Open https://localhost:8080
-# Username: admin
-# Password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
-**GitOps flow:**
-```
-git push → CI builds + pushes image to GHCR
-                │
-            ArgoCD detects Helm chart change
-                │
-            Auto-syncs to Kubernetes cluster
-                │
-            Pods rolling updated automatically
-```
-
-For production clusters, set `ARGOCD_SERVER` and `ARGOCD_TOKEN` as GitHub secrets to enable automatic sync from the CD pipeline.
+Every push to main → CI builds image → GHCR → ArgoCD detects change → auto-deploys to Kubernetes.
 
 ---
 
 ## AWS Deployment (Terraform)
 
-Infrastructure provisioned via Terraform in `ap-south-1`. Deployed and verified — EKS cluster confirmed running, worker nodes showed `Ready`, images pushed to ECR — then destroyed.
-
-**What gets provisioned:**
-
-| Resource | Details |
-|---|---|
-| VPC | 10.0.0.0/16, 2 public + 2 private subnets across 2 AZs |
-| EKS Cluster | Kubernetes 1.29, `nexus-dev-cluster` |
-| Node Group | 2x t3.medium, autoscales 1→3 |
-| ECR | 3 repositories — api, worker, receiver |
-| NAT Gateways | 2x for private subnet outbound traffic |
-| IAM | EKS cluster role + node role with least-privilege policies |
+Deployed and verified on AWS — EKS cluster running in ap-south-1, 2 worker nodes confirmed Ready, images pushed to ECR, then destroyed.
 ```bash
 cd terraform
 terraform init
@@ -285,35 +339,17 @@ terraform plan -var-file=env/dev/terraform.tfvars
 terraform apply -var-file=env/dev/terraform.tfvars
 ```
 
-**Push images to ECR after provisioning:**
-```bash
-aws ecr get-login-password --region ap-south-1 | \
-  docker login --username AWS --password-stdin <account_id>.dkr.ecr.ap-south-1.amazonaws.com
-
-docker build -f dockerfile -t nexus-webhook-api:latest .
-docker tag nexus-webhook-api:latest <ecr_api_url>:latest
-docker push <ecr_api_url>:latest
-```
-
-**Connect kubectl to EKS and deploy via Helm:**
-```bash
-aws eks update-kubeconfig --region ap-south-1 --name nexus-dev-cluster
-helm install nexus helm/nexus \
-  --set api.image=<ecr_api_url> \
-  --set worker.image=<ecr_worker_url> \
-  --set receiver.image=<ecr_receiver_url>
-```
-
-**Tear down:**
-```bash
-terraform destroy -var-file=env/dev/terraform.tfvars
-```
+| Resource | Details |
+|---|---|
+| VPC | 10.0.0.0/16, 2 public + 2 private subnets across 2 AZs |
+| EKS | Kubernetes 1.29, nexus-dev-cluster |
+| Node Group | 2x t3.medium, autoscales 1→3 |
+| ECR | 3 repositories with scan-on-push enabled |
+| IAM | Least-privilege roles for EKS and nodes |
 
 ---
 
 ## Alerting
-
-AlertManager fires Slack alerts for:
 
 | Alert | Condition | Severity |
 |---|---|---|
@@ -324,51 +360,23 @@ AlertManager fires Slack alerts for:
 
 ---
 
-## AI Failure Diagnostics
-```bash
-ollama serve
-ollama pull llama3
-
-cd janitor
-python3 janitor.py
-```
-
-Example output:
-```
-FAILURE DETECTED: webhook-worker-abc123
-Reason: CrashLoopBackOff | Restarts: 5
-
-AI DIAGNOSIS:
-Root cause: Memory pressure detected. Large payload processing
-caused the worker to exceed its 256Mi memory limit.
-
-Suggested fix: Increase memory limit from 256Mi to 512Mi in
-helm/nexus/values.yaml and run helm upgrade nexus helm/nexus.
-```
-
----
-
 ## Security
-
-CI pipeline order:
 ```
-Lint → Test → Container Security Scan (Trivy) → Build → Push
+Lint → Test → Trivy Container Scan → Build → Push to GHCR
 ```
 
-Trivy fails the build on any critical, fixable CVE. Payload sanitization strips sensitive keys and script injection from every event before it hits the queue.
+Trivy blocks on critical CVEs. Payload sanitization strips sensitive keys (password, token, api_key, secret) and XSS patterns from every event payload before it enters the queue.
 
 ---
 
 ## CI/CD
 
-Every push to `main` triggers:
-
 1. **Lint** — flake8 across all Python source files
-2. **Test** — pytest with live Postgres and Redis service containers
-3. **Security Scan** — Trivy scans each Docker image for critical CVEs
-4. **Build** — all three images built and verified
+2. **Test** — 13 pytest tests, no services required
+3. **Security Scan** — Trivy on each Docker image
+4. **Build** — all images built and verified
 5. **Push** — images pushed to GitHub Container Registry
-6. **ArgoCD Sync** — triggers Kubernetes deployment via GitOps
+6. **ArgoCD Sync** — triggers Kubernetes deployment
 
 Images: `ghcr.io/kavangowda69/nexus-webhook-*`
 
@@ -379,47 +387,47 @@ Images: `ghcr.io/kavangowda69/nexus-webhook-*`
 nexus-webhook-platform/
 ├── api/
 │   ├── main.py              # FastAPI app, all routes
-│   ├── worker/
-│   │   └── worker.py        # Delivery, retry, circuit breaker,
-│   │                        # adaptive rate limiting, inference routing
+│   ├── worker/worker.py     # Delivery, retry, circuit breaker,
+│   │                        # adaptive rate, inference routing
 │   ├── models/              # SQLAlchemy models
 │   ├── database/            # DB connection
-│   ├── logger.py            # Structured JSON + Logstash UDP shipping
-│   ├── metrics.py           # Prometheus counters and histograms
+│   ├── logger.py            # Structured JSON + Logstash UDP + error_type
+│   ├── metrics.py           # Prometheus counters, histograms, AIOps metrics
 │   ├── tracing.py           # OpenTelemetry setup
 │   └── sanitizer.py         # Payload sanitization
+├── aiops/
+│   ├── main.py              # Orchestration loop (30s interval)
+│   ├── detector.py          # Prometheus + Kubernetes incident detection
+│   ├── analyzer.py          # ELK logs + Ollama/Llama3 root cause analysis
+│   ├── planner.py           # Cause → action mapping
+│   ├── policy.py            # Safety gates: confidence, cooldown, limits
+│   ├── executor.py          # Kubernetes API scaling and actions
+│   ├── verifier.py          # Post-action metric verification
+│   ├── memory.py            # Incident storage in Postgres
+│   ├── kube_client.py       # Kubernetes Python client
+│   ├── prometheus_client.py # Prometheus HTTP API client
+│   ├── elk_client.py        # Elasticsearch log client
+│   ├── runbooks/            # Remediation playbooks
+│   └── Dockerfile
 ├── inference/
 │   ├── model_server.py      # BentoML inference service
 │   └── Dockerfile
 ├── janitor/
-│   └── janitor.py           # AI-powered pod failure diagnostics
-├── helm/
-│   └── nexus/               # Helm chart
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
-├── argocd/
-│   └── nexus-app.yaml       # ArgoCD application manifest
-├── terraform/               # AWS infrastructure as code
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── env/dev/
-│   └── modules/
-│       ├── vpc/
-│       ├── eks/
-│       ├── ecr/
-│       └── iam/
+│   └── janitor.py           # Lightweight pod crash diagnostics
+├── helm/nexus/              # Helm chart with AIOps deployment + RBAC
+├── argocd/                  # ArgoCD application manifest
+├── terraform/               # AWS VPC, EKS, ECR, IAM modules
 ├── k8s/                     # Raw Kubernetes manifests
 ├── logstash/pipeline/       # Logstash pipeline config
 ├── tests/
-│   ├── test_api.py          # pytest unit tests
+│   ├── test_api.py          # Original API tests
+│   ├── test_nexus.py        # Comprehensive 13-test suite
 │   └── load_test.js         # k6 load test
-├── .github/workflows/       # CI/CD pipelines
+├── .github/workflows/       # CI + CD pipelines
 ├── grafana/                 # Grafana datasource provisioning
 ├── prometheus.yml           # Prometheus scrape config
 ├── prometheus_rules.yml     # Alert rules
-├── alertmanager.yml         # AlertManager + Slack config
+├── alertmanager.yml         # AlertManager + Slack
 ├── dockerfile               # Multi-stage API/worker image
 ├── Dockerfile.receiver      # Multi-stage receiver image
 └── docker-compose.yml       # Full local dev stack
@@ -429,15 +437,16 @@ nexus-webhook-platform/
 
 ## What this demonstrates
 
-- Distributed event processing with queue-based job routing
+- Distributed event processing with queue-based fairness scheduling
 - Production containerization and image optimization
-- Kubernetes orchestration with Helm and horizontal autoscaling
+- Kubernetes orchestration with Helm, HPA, and RBAC
+- **Autonomous AIOps** — full incident lifecycle from detection to resolution without human intervention
 - GitOps continuous delivery with ArgoCD
 - AWS cloud deployment — EKS, ECR, VPC, IAM via Terraform
-- Full observability: metrics, structured logs, distributed traces
+- Full observability: Prometheus metrics, structured logs, distributed traces
 - Centralized log aggregation with ELK stack
 - Real-time alerting with AlertManager and Slack
-- CI/CD pipeline with security scanning baked in
+- DevSecOps pipeline with Trivy container scanning
 - Adaptive systems design — rate limiting that responds to real endpoint behavior
-- AIOps — automated failure diagnosis using local LLMs
 - MLOps hook — async inference routing turning a webhook platform into AI infrastructure
+- Comprehensive test suite covering all critical delivery paths

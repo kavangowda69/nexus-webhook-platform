@@ -4,6 +4,8 @@ A production-grade distributed webhook delivery system that evolved from a basic
 
 Built phase by phase — every component exists for a reason, every decision is documented, every service has been deployed and verified on real infrastructure.
 
+## 2-Minute System Demo:
+https://www.loom.com/share/61abc5b856eb40ec817bfc782c3cc147
 ---
 
 ## What it does
